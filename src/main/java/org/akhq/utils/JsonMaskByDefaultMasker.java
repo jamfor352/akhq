@@ -5,14 +5,15 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSyntaxException;
 import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Singleton;
 import lombok.SneakyThrows;
 import org.akhq.configs.DataMasking;
 import org.akhq.models.Record;
 
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Singleton
 @Requires(property = "akhq.security.data-masking.mode", value = "json_mask_by_default")
@@ -26,14 +27,17 @@ public class JsonMaskByDefaultMasker extends JsonMasker {
     }
 
     public Record maskRecord(Record record) {
-        if (!isJson(record)) {
+        if (record.getValue() == null) {
             record.setValue(NON_JSON_MESSAGE);
             return record;
         }
 
         try {
-            List<String> keysToUnmask = getKeysForTopic(record.getTopic().getName());
+            Set<String> keysToUnmask = getKeySetForTopic(record.getTopic().getName());
             return applyMasking(record, keysToUnmask);
+        } catch (JsonSyntaxException | IllegalStateException e) {
+            record.setValue(NON_JSON_MESSAGE);
+            return record;
         } catch (Exception e) {
             LOG.error("Error masking record at topic {}, partition {}, offset {} due to {}",
                 record.getTopic(), record.getPartition(), record.getOffset(), e.getMessage());
@@ -43,14 +47,18 @@ public class JsonMaskByDefaultMasker extends JsonMasker {
     }
 
     @SneakyThrows
-    private Record applyMasking(Record record, List<String> keysToUnmask) {
+    private Record applyMasking(Record record, Set<String> keysToUnmask) {
         JsonElement root = JsonParser.parseString(record.getValue());
+        if (!root.isJsonObject() && !root.isJsonArray()) {
+            record.setValue(NON_JSON_MESSAGE);
+            return record;
+        }
         maskJson(root, "", keysToUnmask);
         record.setValue(root.toString());
         return record;
     }
 
-    private void maskJson(JsonElement element, String path, List<String> keysToUnmask) {
+    private void maskJson(JsonElement element, String path, Set<String> keysToUnmask) {
         if (element.isJsonObject()) {
             maskJsonObject(element.getAsJsonObject(), path, keysToUnmask);
         } else if (element.isJsonArray()) {
@@ -58,7 +66,7 @@ public class JsonMaskByDefaultMasker extends JsonMasker {
         }
     }
 
-    private void maskJsonObject(JsonObject obj, String path, List<String> keysToUnmask) {
+    private void maskJsonObject(JsonObject obj, String path, Set<String> keysToUnmask) {
         for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
             String newPath = path + entry.getKey();
             JsonElement value = entry.getValue();
@@ -71,7 +79,7 @@ public class JsonMaskByDefaultMasker extends JsonMasker {
         }
     }
 
-    private void maskJsonArray(JsonArray array, String path, List<String> keysToUnmask) {
+    private void maskJsonArray(JsonArray array, String path, Set<String> keysToUnmask) {
         boolean shouldMask = !keysToUnmask.contains(path.substring(0, path.length() - 1));
 
         for (int i = 0; i < array.size(); i++) {
@@ -84,7 +92,7 @@ public class JsonMaskByDefaultMasker extends JsonMasker {
         }
     }
 
-    private boolean shouldMaskPrimitive(JsonElement value, String path, List<String> keysToUnmask) {
+    private boolean shouldMaskPrimitive(JsonElement value, String path, Set<String> keysToUnmask) {
         return value.isJsonPrimitive() && !keysToUnmask.contains(path);
     }
 

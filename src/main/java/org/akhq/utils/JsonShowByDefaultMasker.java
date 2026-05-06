@@ -11,8 +11,6 @@ import lombok.SneakyThrows;
 import org.akhq.configs.DataMasking;
 import org.akhq.models.Record;
 
-import java.util.List;
-
 @Singleton
 @Requires(property = "akhq.security.data-masking.mode", value = "json_show_by_default")
 public class JsonShowByDefaultMasker extends JsonMasker {
@@ -26,12 +24,15 @@ public class JsonShowByDefaultMasker extends JsonMasker {
     @Override
     public Record maskRecord(Record record) {
         try {
-            if (!isJson(record)) {
+            String topic = record.getTopic().getName().toLowerCase();
+            String[][] pathArrays = getPathArraysForTopic(topic);
+            if (pathArrays.length == 0) {
                 return record;
             }
-            String topic = record.getTopic().getName().toLowerCase();
-            List<String> keysToMask = getKeysForTopic(topic);
-            return keysToMask.isEmpty() ? record : applyMasking(record, keysToMask);
+            if (record.getValue() == null) {
+                return record;
+            }
+            return applyMasking(record, pathArrays);
         } catch (Exception e) {
             LOG.error(ERROR_MESSAGE, e);
             return record;
@@ -39,12 +40,11 @@ public class JsonShowByDefaultMasker extends JsonMasker {
     }
 
     @SneakyThrows
-    private Record applyMasking(Record record, List<String> keysToMask) {
+    private Record applyMasking(Record record, String[][] pathArrays) {
         JsonElement root = JsonParser.parseString(record.getValue());
-        String[][] pathArrays = keysToMask
-            .stream()
-            .map(key -> key.split("\\."))
-            .toArray(String[][]::new);
+        if (!root.isJsonObject() && !root.isJsonArray()) {
+            return record;
+        }
         maskPaths(root, pathArrays);
         record.setValue(root.toString());
         return record;
